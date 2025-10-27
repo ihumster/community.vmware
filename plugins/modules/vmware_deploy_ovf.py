@@ -7,10 +7,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 from __future__ import absolute_import, division, print_function
+
 __metaclass__ = type
 
 
-DOCUMENTATION = r'''
+DOCUMENTATION = r"""
 author:
     - Alexander Nikitin (@ihumster)
     - Matt Martz (@sivel)
@@ -153,9 +154,9 @@ options:
 extends_documentation_fragment:
 - vmware.vmware.base_options
 
-'''
+"""
 
-EXAMPLES = r'''
+EXAMPLES = r"""
 - community.vmware.vmware_deploy_ovf:
     hostname: '{{ vcenter_hostname }}'
     username: '{{ vcenter_username }}'
@@ -195,16 +196,16 @@ EXAMPLES = r'''
     url: https://cloud-images.ubuntu.com/releases/xenial/release/ubuntu-16.04-server-cloudimg-amd64.ova
     wait_for_ip_address: true
   delegate_to: localhost
-'''
+"""
 
 
-RETURN = r'''
+RETURN = r"""
 instance:
     description: metadata about the new virtual machine
     returned: always
     type: dict
     sample: None
-'''
+"""
 
 import hashlib
 import io
@@ -222,7 +223,6 @@ from threading import Thread
 
 from ansible.module_utils.common.text.converters import to_native
 from ansible.module_utils.basic import AnsibleModule
-from urllib.request import Request, urlopen
 from ansible.module_utils.urls import generic_urlparse, open_url, urlparse, urlunparse
 from ansible_collections.community.vmware.plugins.module_utils.vmware import (
     find_all_networks_by_name,
@@ -231,8 +231,12 @@ from ansible_collections.community.vmware.plugins.module_utils.vmware import (
     gather_vm_facts,
     wait_for_task,
     wait_for_vm_ip,
-    set_vm_power_state)
-from ansible_collections.vmware.vmware.plugins.module_utils.argument_spec import base_argument_spec
+    set_vm_power_state,
+)
+from ansible_collections.vmware.vmware.plugins.module_utils.argument_spec import (
+    base_argument_spec,
+)
+
 try:
     from ansible_collections.community.vmware.plugins.module_utils.vmware import vim
     from pyVmomi import vmodl
@@ -254,7 +258,6 @@ class WebHandle(object):
         self.url = url
         self.thumbprint = None
         self.ssl_context = None
-
         self.parsed_url = self._parse_url(url)
         self.https = self.parsed_url.group('scheme') == 'https://'
 
@@ -262,42 +265,37 @@ class WebHandle(object):
             self.ssl_context = ssl._create_default_https_context()
             self.ssl_context.check_hostname = False
             self.ssl_context.verify_mode = ssl.CERT_NONE
-
-            self.thumbprint = self._get_thumbprint(
-                self.parsed_url.group('hostname'))
-            r = urlopen(Request(url, method="HEAD"), context=self.ssl_context)
+            self.thumbprint = self._get_thumbprint(self.parsed_url.group('hostname'))
+            r = open_url(url, method='HEAD', validate_certs=False)
         else:
-            r = urlopen(Request(url, method="HEAD"))
+            r = open_url(url, method='HEAD', validate_certs=False)
 
-        if r.code != 200:
+        if r.getcode() != 200:
             raise FileNotFoundError(url)
         self.headers = self._headers_to_dict(r)
 
-        if 'content-length' not in self.headers:
-            raise Exception("Missing content-length in response")
-        self.st_size = int(self.headers['content-length'])
+        content_length = self.headers.get('content-length')
+        if content_length is None:
+            raise Exception('Missing content-length in response')
+        self.st_size = int(content_length)
 
-        # Perform a real range test instead of checking 'accept-ranges'
         if not self._supports_range_request():
-            raise Exception("Site does not support range requests (no valid response to Range header)")
+            raise Exception(
+                'Site does not support range requests (no valid response to Range header)'
+            )
 
         self.offset = 0
 
     def _supports_range_request(self):
-        req = Request(self.url)
-        req.add_header('Range', 'bytes=0-0')
         try:
-            if self.ssl_context:
-                r = urlopen(req, context=self.ssl_context)
-            else:
-                r = urlopen(req)
-            return r.status == 206  # Partial Content
+            r = open_url(self.url, headers={'Range': 'bytes=0-0'}, validate_certs=False)
+            return r.getcode() == 206  # Partial Content
         except Exception:
             return False
 
     def _parse_url(self, url):
         HTTP_SCHEMA_PATTERN = (
-            r"(?P<url>(?:(?P<scheme>[a-zA-Z]+:\/\/)?(?P<hostname>(?:[-a-zA-Z0-9@%_\+~#=]{1,256}\.){1,256}(?:[-a-zA-Z0-9@%_\+~#=]{1,256})))"
+            r'(?P<url>(?:(?P<scheme>[a-zA-Z]+:\/\/)?(?P<hostname>(?:[-a-zA-Z0-9@%_\+~#=]{1,256}\.){1,256}(?:[-a-zA-Z0-9@%_\+~#=]{1,256})))'
             r"(?::(?P<port>[[:digit:]]+))?(?P<path>(?:\/[-a-zA-Z0-9!$&'()*+,\\\/:;=@\[\]._~%]*)*)"
             r"(?P<query>(?:(?:\#|\?)[-a-zA-Z0-9!$&'()*+,\\\/:;=@\[\]._~]*)*))"
         )
@@ -306,19 +304,13 @@ class WebHandle(object):
     def _get_thumbprint(self, hostname):
         pem = ssl.get_server_certificate((hostname, 443))
         sha1 = hashlib.sha1(ssl.PEM_cert_to_DER_cert(pem)).hexdigest().upper()
-        colon_notion = ':'.join(sha1[i:i + 2] for i in range(0, len(sha1), 2))
-        return None if sha1 is None else colon_notion
+        colon_notion = ':'.join(sha1[i : i + 2] for i in range(0, len(sha1), 2))
+        return colon_notion
 
     def _headers_to_dict(self, r):
         result = {}
-        if hasattr(r, 'getheaders'):
-            for n, v in r.getheaders():
-                result[n.lower()] = v.strip()
-        else:
-            for line in r.info().headers:
-                if line.find(':') != -1:
-                    n, v = line.split(': ', 1)
-                    result[n.lower()] = v.strip()
+        for n, v in r.headers.items():
+            result[n.lower()] = v.strip()
         return result
 
     def tell(self):
@@ -339,16 +331,14 @@ class WebHandle(object):
     def read(self, amount):
         start = self.offset
         end = self.offset + amount - 1
-        req = Request(self.url,
-                      headers={'Range': 'bytes=%d-%d' % (start, end)})
-        r = urlopen(req) if not self.ssl_context else urlopen(
-            req, context=self.ssl_context)
+        r = open_url(
+            self.url, headers={'Range': f'bytes={start}-{end}'}, validate_certs=False
+        )
         self.offset += amount
         result = r.read(amount)
         r.close()
         return result
 
-    # A slightly more accurate percentage
     def progress(self):
         return int(100.0 * self.offset / self.st_size)
 
@@ -358,7 +348,7 @@ class ProgressReader(io.FileIO):
         self.bytes_read = 0
         io.FileIO.__init__(self, name, mode=mode, closefd=closefd)
 
-    def read(self, size=10240):
+    def read(self, size: int | None = 10240):
         chunk = io.FileIO.read(self, size)
         self.bytes_read += len(chunk)
         return chunk
@@ -378,7 +368,7 @@ class TarFileProgressReader(tarfile.ExFileObject):
         except Exception:
             pass
 
-    def read(self, size=10240):
+    def read(self, size: int | None = 10240):
         chunk = tarfile.ExFileObject.read(self, size)
         self.bytes_read += len(chunk)
         return chunk
@@ -412,9 +402,9 @@ class VMDKUploader(Thread):
             return 0
 
     def _request_opts(self):
-        '''
+        """
         Requests for vmdk files differ from other file types. Build the request options here to handle that
-        '''
+        """
         headers = {
             'Content-Length': self.size,
             'Content-Type': 'application/octet-stream',
@@ -435,7 +425,12 @@ class VMDKUploader(Thread):
         }
 
     def _open_url(self):
-        open_url(self.url, data=self.f, validate_certs=self.validate_certs, **self._request_opts())
+        open_url(
+            self.url,
+            data=self.f,
+            validate_certs=self.validate_certs,
+            **self._request_opts(),
+        )
 
     def run(self):
         if self.tarinfo:
@@ -475,52 +470,84 @@ class VMwareDeployOvf(PyVmomi):
         # Get datacenter firstly
         self.datacenter = self.find_datacenter_by_name(self.params['datacenter'])
         if self.datacenter is None:
-            self.module.fail_json(msg=f"Datacenter '{self.params['datacenter']}' could not be located")
+            self.module.fail_json(
+                msg=f"Datacenter '{self.params['datacenter']}' could not be located"
+            )
 
         # Get cluster in datacenter if cluster configured
         if self.params['cluster']:
-            cluster = self.find_cluster_by_name(self.params['cluster'], datacenter_name=self.datacenter)
+            cluster = self.find_cluster_by_name(
+                self.params['cluster'], datacenter_name=self.datacenter
+            )
             if cluster is None:
-                self.module.fail_json(msg=f"Unable to find cluster '{self.params['cluster']}'")
-            self.resource_pool = self.find_resource_pool_by_cluster(self.params['resource_pool'], cluster=cluster)
+                self.module.fail_json(
+                    msg=f"Unable to find cluster '{self.params['cluster']}'"
+                )
+            self.resource_pool = self.find_resource_pool_by_cluster(
+                self.params['resource_pool'], cluster=cluster
+            )
         # Or get ESXi host in datacenter if ESXi host configured
         elif self.params['esxi_hostname']:
-            host = self.find_hostsystem_by_name(self.params['esxi_hostname'], datacenter=self.datacenter)
+            host = self.find_hostsystem_by_name(
+                self.params['esxi_hostname'], datacenter=self.datacenter
+            )
             if host is None:
-                self.module.fail_json(msg=f"Unable to find host '{self.params['esxi_hostname']}' in datacenter"
-                                      " '{self.params['datacenter']}'")
-            self.resource_pool = self.find_resource_pool_by_name(self.params['resource_pool'], folder=host.parent)
+                self.module.fail_json(
+                    msg=f"Unable to find host '{self.params['esxi_hostname']}' in datacenter"
+                    " '{self.params['datacenter']}'"
+                )
+            self.resource_pool = self.find_resource_pool_by_name(
+                self.params['resource_pool'], folder=host.parent
+            )
         else:
             # For more than one datacenter env, specify 'folder' to datacenter hostFolder
-            self.resource_pool = self.find_resource_pool_by_name(self.params['resource_pool'], folder=self.datacenter.hostFolder)
+            self.resource_pool = self.find_resource_pool_by_name(
+                self.params['resource_pool'], folder=self.datacenter.hostFolder
+            )
 
         if not self.resource_pool:
-            self.module.fail_json(msg=f"Resource pool '{self.params['resource_pool']}' could not be located")
+            self.module.fail_json(
+                msg=f"Resource pool '{self.params['resource_pool']}' could not be located"
+            )
 
         self.datastore = None
-        datastore_cluster_obj = self.find_datastore_cluster_by_name(self.params['datastore'], datacenter=self.datacenter)
+        datastore_cluster_obj = self.find_datastore_cluster_by_name(
+            self.params['datastore'], datacenter=self.datacenter
+        )
         if datastore_cluster_obj:
             datastore = None
             datastore_freespace = 0
             for ds in datastore_cluster_obj.childEntity:
-                if isinstance(ds, vim.Datastore) and ds.summary.freeSpace > datastore_freespace:
+                if (
+                    isinstance(ds, vim.Datastore)
+                    and ds.summary.freeSpace > datastore_freespace
+                ):
                     # If datastore field is provided, filter destination datastores
-                    if ds.summary.maintenanceMode != 'normal' or not ds.summary.accessible:
+                    if (
+                        ds.summary.maintenanceMode != 'normal'
+                        or not ds.summary.accessible
+                    ):
                         continue
                     datastore = ds
                     datastore_freespace = ds.summary.freeSpace
             if datastore:
                 self.datastore = datastore
         else:
-            self.datastore = self.find_datastore_by_name(self.params['datastore'], datacenter_name=self.datacenter)
+            self.datastore = self.find_datastore_by_name(
+                self.params['datastore'], datacenter_name=self.datacenter
+            )
 
         if self.datastore is None:
-            self.module.fail_json(msg=f"Datastore '{self.params['datastore']}' could not be located on specified ESXi host or"
-                                  " datacenter")
+            self.module.fail_json(
+                msg=f"Datastore '{self.params['datastore']}' could not be located on specified ESXi host or"
+                ' datacenter'
+            )
 
         for key, value in self.params['networks'].items():
             # If we have the same network name defined in multiple clusters, check all networks to get the right one
-            networks = find_all_networks_by_name(self.content, value, datacenter_name=self.datacenter)
+            networks = find_all_networks_by_name(
+                self.content, value, datacenter_name=self.datacenter
+            )
             if not networks:
                 self.module.fail_json(msg=f"Network '{value}' could not be located")
             # Search for the network key of the same network name, that resides in a cluster parameter
@@ -536,7 +563,12 @@ class VMwareDeployOvf(PyVmomi):
                     network_mapping.name = key
                     network_mapping.network = network
                     self.network_mappings.append(network_mapping)
-        return self.datastore, self.datacenter, self.resource_pool, self.network_mappings
+        return (
+            self.datastore,
+            self.datacenter,
+            self.resource_pool,
+            self.network_mappings,
+        )
 
     def get_ovf_descriptor(self):
         if self.params['url'] is None:
@@ -544,7 +576,7 @@ class VMwareDeployOvf(PyVmomi):
             try:
                 path_exists(self.params['ovf'])
             except ValueError as e:
-                self.module.fail_json(msg="%s" % e)
+                self.module.fail_json(msg='%s' % e)
 
             if tarfile.is_tarfile(self.params['ovf']):
                 self.tar = tarfile.open(self.params['ovf'])
@@ -555,11 +587,13 @@ class VMwareDeployOvf(PyVmomi):
                         ovf = candidate
                         break
                 if not ovf:
-                    self.module.fail_json(msg='Could not locate OVF file in %(ovf)s' % self.params)
+                    self.module.fail_json(
+                        msg='Could not locate OVF file in %(ovf)s' % self.params
+                    )
 
                 self.ovf_descriptor = to_native(self.tar.extractfile(ovf).read())
             else:
-                with open(self.params['ovf'], encoding="utf-8") as f:
+                with open(self.params['ovf'], encoding='utf-8') as f:
                     self.ovf_descriptor = f.read()
 
             return self.ovf_descriptor
@@ -567,7 +601,8 @@ class VMwareDeployOvf(PyVmomi):
             self.handle = WebHandle(self.params['url'])
             self.tar = tarfile.open(fileobj=self.handle)
             ovffilename = list(
-                filter(lambda x: x.endswith('.ovf'), self.tar.getnames()))[0]
+                filter(lambda x: x.endswith('.ovf'), self.tar.getnames())
+            )[0]
             ovffile = self.tar.extractfile(ovffilename)
             self.ovf_descriptor = ovffile.read().decode()
 
@@ -575,7 +610,8 @@ class VMwareDeployOvf(PyVmomi):
                 return self.ovf_descriptor
             else:
                 self.module.fail_json(
-                    msg='Could not locate OVF file in %(url)s' % self.params)
+                    msg='Could not locate OVF file in %(url)s' % self.params
+                )
 
     def get_lease(self):
         datastore, datacenter, resource_pool, network_mappings = self.get_objects()
@@ -594,13 +630,17 @@ class VMwareDeployOvf(PyVmomi):
             for key, value in self.params['properties'].items():
                 property_mapping = vim.KeyValue()
                 property_mapping.key = key
-                property_mapping.value = str(value) if isinstance(value, bool) else value
+                property_mapping.value = (
+                    str(value) if isinstance(value, bool) else value
+                )
                 params['propertyMapping'].append(property_mapping)
 
         if self.params['folder']:
             folder = self.content.searchIndex.FindByInventoryPath(self.params['folder'])
             if not folder:
-                self.module.fail_json(msg=f"Unable to find the specified folder {self.params['folder']}")
+                self.module.fail_json(
+                    msg=f'Unable to find the specified folder {self.params["folder"]}'
+                )
         else:
             folder = datacenter.vmFolder
 
@@ -609,10 +649,7 @@ class VMwareDeployOvf(PyVmomi):
         ovf_descriptor = self.get_ovf_descriptor()
 
         self.import_spec = self.content.ovfManager.CreateImportSpec(
-            ovf_descriptor,
-            resource_pool,
-            datastore,
-            spec_params
+            ovf_descriptor, resource_pool, datastore, spec_params
         )
 
         if self.params['enable_hidden_properties']:
@@ -626,31 +663,30 @@ class VMwareDeployOvf(PyVmomi):
             )
         if errors:
             self.module.fail_json(
-                msg=f"Failure validating OVF import spec: {'. '.join(errors)}"
+                msg=f'Failure validating OVF import spec: {". ".join(errors)}'
             )
 
         for warning in getattr(self.import_spec, 'warning', []):
-            self.module.warn(f"Problem validating OVF import spec: {to_native(warning.msg)}")
+            self.module.warn(
+                f'Problem validating OVF import spec: {to_native(warning.msg)}'
+            )
 
         name = self.params.get('name')
         if not self.params['allow_duplicates']:
             name = self.import_spec.importSpec.configSpec.name
             match = find_vm_by_name(self.content, name, folder=folder)
             if match:
-                self.module.exit_json(instance=gather_vm_facts(self.content, match), changed=False)
+                self.module.exit_json(
+                    instance=gather_vm_facts(self.content, match), changed=False
+                )
 
         if self.module.check_mode:
             self.module.exit_json(changed=True, instance={'hw_name': name})
 
         try:
-            self.lease = resource_pool.ImportVApp(
-                self.import_spec.importSpec,
-                folder
-            )
+            self.lease = resource_pool.ImportVApp(self.import_spec.importSpec, folder)
         except vmodl.fault.SystemError as err:
-            self.module.fail_json(
-                msg=f"Failed to start import: {to_native(err.msg)}"
-            )
+            self.module.fail_json(msg=f'Failed to start import: {to_native(err.msg)}')
 
         while self.lease.state != vim.HttpNfcLease.State.ready:
             time.sleep(0.1)
@@ -660,9 +696,9 @@ class VMwareDeployOvf(PyVmomi):
         return self.lease, self.import_spec
 
     def _normalize_url(self, url):
-        '''
+        """
         The hostname in URLs from vmware may be ``*`` update it accordingly
-        '''
+        """
         url_parts = generic_urlparse(urlparse(url))
         if url_parts.hostname == '*':
             if url_parts.port:
@@ -693,7 +729,7 @@ class VMwareDeployOvf(PyVmomi):
                     create=file_item.create,
                     size=file_item.size,
                     sslThumbprint=ssl_thumbprint,
-                    memberName=file_item.path
+                    memberName=file_item.path,
                 )
                 source_files.append(source_file)
 
@@ -714,7 +750,9 @@ class VMwareDeployOvf(PyVmomi):
 
                 if not device_upload_url:
                     lease.HttpNfcLeaseAbort(
-                        vmodl.fault.SystemError(reason=f"Failed to find deviceUrl for file '{file_item.path}'")
+                        vmodl.fault.SystemError(
+                            reason=f"Failed to find deviceUrl for file '{file_item.path}'"
+                        )
                     )
                     self.module.fail_json(
                         msg=f"Failed to find deviceUrl for file '{file_item.path}'"
@@ -727,7 +765,9 @@ class VMwareDeployOvf(PyVmomi):
                         vmdk_tarinfo = self.tar.getmember(file_item.path)
                     except KeyError:
                         lease.HttpNfcLeaseAbort(
-                            vmodl.fault.SystemError(reason=f"Failed to find VMDK file '{file_item.path}' in OVA")
+                            vmodl.fault.SystemError(
+                                reason=f"Failed to find VMDK file '{file_item.path}' in OVA"
+                            )
                         )
                         self.module.fail_json(
                             msg=f"Failed to find VMDK file '{file_item.path}' in OVA"
@@ -738,7 +778,9 @@ class VMwareDeployOvf(PyVmomi):
                         path_exists(vmdk)
                     except ValueError:
                         lease.HttpNfcLeaseAbort(
-                            vmodl.fault.SystemError(reason=f"Failed to find VMDK file at '{vmdk}'")
+                            vmodl.fault.SystemError(
+                                reason=f"Failed to find VMDK file at '{vmdk}'"
+                            )
                         )
                         self.module.fail_json(
                             msg=f"Failed to find VMDK file at '{vmdk}'"
@@ -750,7 +792,7 @@ class VMwareDeployOvf(PyVmomi):
                         device_upload_url,
                         self.params['validate_certs'],
                         tarinfo=vmdk_tarinfo,
-                        create=file_item.create
+                        create=file_item.create,
                     )
                 )
 
@@ -761,7 +803,9 @@ class VMwareDeployOvf(PyVmomi):
                 while uploader.is_alive():
                     time.sleep(0.1)
                     total_bytes_read[i] = uploader.bytes_read
-                    lease.HttpNfcLeaseProgress(int(100.0 * sum(total_bytes_read) / total_size))
+                    lease.HttpNfcLeaseProgress(
+                        int(100.0 * sum(total_bytes_read) / total_size)
+                    )
 
                 if uploader.e:
                     lease.HttpNfcLeaseAbort(
@@ -769,7 +813,7 @@ class VMwareDeployOvf(PyVmomi):
                     )
                     self.module.fail_json(
                         msg='%s' % to_native(uploader.e[1]),
-                        exception=''.join(traceback.format_tb(uploader.e[2]))
+                        exception=''.join(traceback.format_tb(uploader.e[2])),
                     )
 
     def complete(self):
@@ -782,7 +826,7 @@ class VMwareDeployOvf(PyVmomi):
             'xmlns:oe': 'http://schemas.dmtf.org/ovf/environment/1',
             'xmlns:ve': 'http://www.vmware.com/schema/ovfenv',
             'oe:id': '',
-            've:esxId': self.entity._moId
+            've:esxId': self.entity._moId,
         }
         env = ET.Element('Environment', **attrib)
 
@@ -796,13 +840,15 @@ class VMwareDeployOvf(PyVmomi):
         for key, value in self.params['properties'].items():
             params = {
                 'oe:key': key,
-                'oe:value': str(value) if isinstance(value, bool) else value
+                'oe:value': str(value) if isinstance(value, bool) else value,
             }
             ET.SubElement(prop_section, 'Property', **params)
 
         opt = vim.option.OptionValue()
         opt.key = 'guestinfo.ovfEnv'
-        opt.value = '<?xml version="1.0" encoding="UTF-8"?>' + to_native(ET.tostring(env))
+        opt.value = '<?xml version="1.0" encoding="UTF-8"?>' + to_native(
+            ET.tostring(env)
+        )
 
         config_spec = vim.vm.ConfigSpec()
         config_spec.extraConfig = [opt]
@@ -814,7 +860,9 @@ class VMwareDeployOvf(PyVmomi):
         facts = {}
 
         if self.params['power_on']:
-            facts = set_vm_power_state(self.content, self.entity, 'poweredon', force=False)
+            facts = set_vm_power_state(
+                self.content, self.entity, 'poweredon', force=False
+            )
             if self.params['wait_for_ip_address']:
                 _facts = wait_for_vm_ip(self.content, self.entity)
                 if not _facts:
@@ -828,89 +876,91 @@ class VMwareDeployOvf(PyVmomi):
 
 def main():
     argument_spec = base_argument_spec()
-    argument_spec.update({
-        'name': {},
-        'datastore': {
-            'default': 'datastore1',
-        },
-        'datacenter': {
-            'default': 'ha-datacenter',
-        },
-        'cluster': {
-            'default': None,
-        },
-        'esxi_hostname': {
-            'default': None,
-        },
-        'deployment_option': {
-            'default': None,
-        },
-        'folder': {
-            'default': None,
-        },
-        'inject_ovf_env': {
-            'default': False,
-            'type': 'bool',
-        },
-        'resource_pool': {
-            'default': 'Resources',
-        },
-        'networks': {
-            'default': {
-                'VM Network': 'VM Network',
+    argument_spec.update(
+        {
+            'name': {},
+            'datastore': {
+                'default': 'datastore1',
             },
-            'type': 'dict',
-        },
-        'ovf': {
-            'type': 'path',
-            'aliases': ['ova'],
-        },
-        'url': {
-            'type': 'str',
-        },
-        'disk_provisioning': {
-            'choices': [
-                'flat',
-                'eagerZeroedThick',
-                'monolithicSparse',
-                'twoGbMaxExtentSparse',
-                'twoGbMaxExtentFlat',
-                'thin',
-                'sparse',
-                'thick',
-                'seSparse',
-                'monolithicFlat'
-            ],
-            'default': 'thin',
-        },
-        'enable_hidden_properties': {
-            'default': False,
-            'type': 'bool',
-        },
-        'power_on': {
-            'type': 'bool',
-            'default': True,
-        },
-        'properties': {
-            'type': 'dict',
-        },
-        'wait': {
-            'type': 'bool',
-            'default': True,
-        },
-        'wait_for_ip_address': {
-            'type': 'bool',
-            'default': False,
-        },
-        'allow_duplicates': {
-            'type': 'bool',
-            'default': True,
-        },
-        'fail_on_spec_warnings': {
-            'type': 'bool',
-            'default': False,
-        },
-    })
+            'datacenter': {
+                'default': 'ha-datacenter',
+            },
+            'cluster': {
+                'default': None,
+            },
+            'esxi_hostname': {
+                'default': None,
+            },
+            'deployment_option': {
+                'default': None,
+            },
+            'folder': {
+                'default': None,
+            },
+            'inject_ovf_env': {
+                'default': False,
+                'type': 'bool',
+            },
+            'resource_pool': {
+                'default': 'Resources',
+            },
+            'networks': {
+                'default': {
+                    'VM Network': 'VM Network',
+                },
+                'type': 'dict',
+            },
+            'ovf': {
+                'type': 'path',
+                'aliases': ['ova'],
+            },
+            'url': {
+                'type': 'str',
+            },
+            'disk_provisioning': {
+                'choices': [
+                    'flat',
+                    'eagerZeroedThick',
+                    'monolithicSparse',
+                    'twoGbMaxExtentSparse',
+                    'twoGbMaxExtentFlat',
+                    'thin',
+                    'sparse',
+                    'thick',
+                    'seSparse',
+                    'monolithicFlat',
+                ],
+                'default': 'thin',
+            },
+            'enable_hidden_properties': {
+                'default': False,
+                'type': 'bool',
+            },
+            'power_on': {
+                'type': 'bool',
+                'default': True,
+            },
+            'properties': {
+                'type': 'dict',
+            },
+            'wait': {
+                'type': 'bool',
+                'default': True,
+            },
+            'wait_for_ip_address': {
+                'type': 'bool',
+                'default': False,
+            },
+            'allow_duplicates': {
+                'type': 'bool',
+                'default': True,
+            },
+            'fail_on_spec_warnings': {
+                'type': 'bool',
+                'default': False,
+            },
+        }
+    )
     module = AnsibleModule(
         argument_spec=argument_spec,
         supports_check_mode=True,
