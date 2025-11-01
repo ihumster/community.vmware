@@ -254,24 +254,40 @@ def path_exists(value):
 
 
 class WebHandle(object):
-    def __init__(self, url):
+    def __init__(self, url, url_username: str = '', url_password: str = ''):
         self.url = url
+        self.url_username = url_username.strip()
+        self.url_password = url_password.strip()
         self.thumbprint = None
-        self.ssl_context = None
         self.parsed_url = self._parse_url(url)
         self.https = self.parsed_url.group('scheme') == 'https://'
 
+        import epdb
+
+        epdb.connect()
+        epdb.set_trace()
+
         if self.https:
-            self.ssl_context = ssl._create_default_https_context()
-            self.ssl_context.check_hostname = False
-            self.ssl_context.verify_mode = ssl.CERT_NONE
             self.thumbprint = self._get_thumbprint(self.parsed_url.group('hostname'))
-            r = open_url(url, method='HEAD', validate_certs=False)
+
+        if self.url_username != '':
+            r = open_url(
+                url,
+                method='HEAD',
+                validate_certs=False,
+                url_username=self.url_username,
+                url_password=self.url_password,
+            )
         else:
             r = open_url(url, method='HEAD', validate_certs=False)
 
-        if r.getcode() != 200:
+        if r.getcode() == 401:
+            raise Exception(
+                'Basic Authentication failed. Please privide url_username and url_password.'
+            )
+        elif r.getcode() != 200:
             raise FileNotFoundError(url)
+
         self.headers = self._headers_to_dict(r)
 
         content_length = self.headers.get('content-length')
@@ -288,7 +304,18 @@ class WebHandle(object):
 
     def _supports_range_request(self):
         try:
-            r = open_url(self.url, headers={'Range': 'bytes=0-0'}, validate_certs=False)
+            if self.url_username != '':
+                r = open_url(
+                    self.url,
+                    headers={'Range': 'bytes=0-0'},
+                    validate_certs=False,
+                    url_username=self.url_username,
+                    url_password=self.url_password,
+                )
+            else:
+                r = open_url(
+                    self.url, headers={'Range': 'bytes=0-0'}, validate_certs=False
+                )
             return r.getcode() == 206  # Partial Content
         except Exception:
             return False
@@ -331,9 +358,20 @@ class WebHandle(object):
     def read(self, amount):
         start = self.offset
         end = self.offset + amount - 1
-        r = open_url(
-            self.url, headers={'Range': f'bytes={start}-{end}'}, validate_certs=False
-        )
+        if self.url_username != '':
+            r = open_url(
+                self.url,
+                headers={'Range': f'bytes={start}-{end}'},
+                validate_certs=False,
+            )
+        else:
+            r = open_url(
+                self.url,
+                headers={'Range': f'bytes={start}-{end}'},
+                validate_certs=False,
+                url_username=self.url_username,
+                url_password=self.url_password,
+            )
         self.offset += amount
         result = r.read(amount)
         r.close()
@@ -425,6 +463,10 @@ class VMDKUploader(Thread):
         }
 
     def _open_url(self):
+        import epdb
+
+        epdb.connect()
+        epdb.st()
         open_url(
             self.url,
             data=self.f,
@@ -915,6 +957,12 @@ def main():
                 'aliases': ['ova'],
             },
             'url': {
+                'type': 'str',
+            },
+            'url_username': {
+                'type': 'str',
+            },
+            'url_password': {
                 'type': 'str',
             },
             'disk_provisioning': {
